@@ -9,3 +9,41 @@ datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
+
+enum MediaState {
+  DOWN
+  RUNNING
+  DEMOLISHED
+}
+
+model Resolution {
+  id      Int    @id @default(autoincrement())
+  width   Int
+  height  Int
+  ppi     Int
+  Media   Media? @relation(fields: [mediaId], references: [id])
+  mediaId Int?
+}
+
+model Media {
+  id                     Int          @id @default(autoincrement())
+  mdmId                  Int
+  version                Int
+  name                   String
+  owner                  String
+  state                  MediaState
+  address                String
+  sido                   String
+  gugun                  String
+  dong                   String
+  totalMonitorCount      Int
+  workingMonitorCount    Int
+  managementMonitorCount Int
+  householdCount         Int
+  resolutions            Resolution[]
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  deletedAt              DateTime?
+
+  @@unique([mdmId, version])
+}
