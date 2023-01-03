@@ -14,11 +14,11 @@ export class PrismaService
           level: 'query',
         },
       ],
-      errorFormat: 'colorless',
     });
     this.$on('query', async (e) => {
       console.log(
         `
+        ${new Date().toLocaleString()}
         Query: ${e.query}
         Params: ${e.params}
         Duration: ${e.duration}ms
