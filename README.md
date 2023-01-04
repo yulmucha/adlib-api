@@ -24,7 +24,24 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 요구 사항
+### 매체(Media)
+- 매체는 물리적 플레이어 디바이스의 논리적 묶음이며 따라서 여러 개의 해상도를 가진다.
+- 일부 데이터를 변경하게 되더라도 기존 데이터를 유지해야 한다.  
+natural key(`mdmId`)와 version number(`version`)로 관리한다.
+  - `mdmId`와 `version` 조합은 unique.
+- soft delete
+  - 이미 삭제 처리된 레코드는 저장되어 있지 않은 것으로 간주하여 삭제 재 요청 시 404 Not Found로 응답한다.
+- 저장 시 동일한 natural key(`mdmId`)를 가진 데이터가 이미 저장되어 있다면 저장하지 않는다.
+  - 단, 삭제 처리된 레코드는 저장되어 있지 않은 것으로 간주하여 natural key 중복으로 판단하지 않는다.
+  - unique constraint([ `mdmId`, `version` ])에 위배되지 않도록 삭제 처리된 레코드까지 고려하여 `version` 값을 할당한다.
+  - 해상도 데이터를 같이 받아서, 저장되어 있지 않은 해상도를 저장하고, 매체-해상도 매핑 정보를 저장한다.
+- 목록 조회 시 natural key별로 version number가 가장 높은 것들을 반환한다.
+  - 삭제 처리된 레코드는 저장되어 있지 않은 것으로 간주하여 반환하지 않는다.
+- 조회 모델 구성 시 해상도 ID만이 아닌 상세 데이터까지 포함한다.
+
+### 해상도(Resolution)
+- 매체에 속한 플레이어 디바이스의 해상도가 파편화되면 안 되는 비즈니스 특성상 해상도를 매체의 값 객체가 아닌 별도의 애그리거트 루트로 관리한다.
 
 ## Installation
 
