@@ -125,9 +125,16 @@ export class MediasService {
           }),
       ),
     );
-    const resolutionIds = medias.flatMap((media) =>
-      media.resolutions.map((mediaResolution) => mediaResolution.resolutionId),
-    );
+
+    const resolutionIds = [
+      ...new Set(
+        medias.flatMap((media) =>
+          media.resolutions.map(
+            (mediaResolution) => mediaResolution.resolutionId,
+          ),
+        ),
+      ),
+    ];
     const resolutions = await this.prisma.resolution.findMany({
       where: {
         id: { in: resolutionIds },
