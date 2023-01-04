@@ -17,16 +17,25 @@ enum MediaState {
 }
 
 model Resolution {
-  id      Int    @id @default(autoincrement())
-  width   Int
-  height  Int
-  ppi     Int
-  Media   Media? @relation(fields: [mediaId], references: [id])
-  mediaId Int?
+  id     Int @id @default(autoincrement())
+  width  Int
+  height Int
+  ppi    Int
+
+  @@unique([width, height, ppi])
+}
+
+model MediaResolution {
+  id           Int    @id @default(autoincrement())
+  resolutionId Int
+  Media        Media? @relation(fields: [mediaId], references: [id])
+  mediaId      Int?
+
+  @@unique([mediaId, resolutionId])
 }
 
 model Media {
-  id                     Int          @id @default(autoincrement())
+  id                     Int               @id @default(autoincrement())
   mdmId                  Int
   version                Int
   name                   String
@@ -40,9 +49,9 @@ model Media {
   workingMonitorCount    Int
   managementMonitorCount Int
   householdCount         Int
-  resolutions            Resolution[]
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  resolutions            MediaResolution[]
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
   deletedAt              DateTime?
 
   @@unique([mdmId, version])
