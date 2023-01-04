@@ -197,7 +197,21 @@ export class MediasService {
     return `This action updates a #${id} media`;
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} media`;
+  async remove(id: number) {
+    const media = await this.prisma.media.findUnique({
+      where: { id },
+    });
+
+    if (media === null || media.deletedAt !== null) {
+      console.log(media);
+      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${id}`);
+    }
+
+    await this.prisma.media.update({
+      where: { id: media.id },
+      data: {
+        deletedAt: new Date(),
+      },
+    });
   }
 }
