@@ -157,36 +157,10 @@ export class MediasService {
   }
 
   async findAll() {
+    const latestVersionsByMdmId = await this.getLatestVersionsByMdmId();
     const medias = await Promise.all(
-      (
-        await this.prisma.media.groupBy({
-          by: ['mdmId'],
-          where: {
-            deletedAt: null,
-          },
-          // TODO: if pagination needed
-          // orderBy: {
-          //   mdmId: 'asc',
-          // },
-          // skip: 1,
-          // take: 2,
-          _max: {
-            version: true,
-          },
-        })
-      ).map(
-        async ({ mdmId, _max }) =>
-          await this.prisma.media.findUnique({
-            where: {
-              mdmId_version: {
-                mdmId: mdmId,
-                version: _max.version,
-              },
-            },
-            include: {
-              resolutions: true,
-            },
-          }),
+      latestVersionsByMdmId.map(({ mdmId, _max }) =>
+        this.findOneMediaByMdmIdAndVersion(mdmId, _max.version),
       ),
     );
 
@@ -199,11 +173,8 @@ export class MediasService {
         ),
       ),
     ];
-    const resolutions = await this.prisma.resolution.findMany({
-      where: {
-        id: { in: resolutionIds },
-      },
-    });
+    const resolutions = await this.findAllResolutionsByIdIn(resolutionIds);
+
     const resolutionsById = new Map(
       resolutions.map((resolution) => [resolution.id, resolution]),
     );
@@ -211,15 +182,51 @@ export class MediasService {
     return medias.map((media) => ({
       ...media,
       ...{
-        resolutions: media.resolutions.map((mediaResolution) => {
-          const resolution = resolutionsById.get(mediaResolution.resolutionId);
-          if (resolution === undefined) {
-            throw new InternalServerErrorException('해상도 데이터 손상');
-          }
-          return resolution;
-        }),
+        resolutions: media.resolutions.map((mediaResolution) =>
+          resolutionsById.get(mediaResolution.resolutionId),
+        ),
       },
     }));
+  }
+
+  private async findOneMediaByMdmIdAndVersion(
+    mdmId: number,
+    version: number,
+  ): Promise<
+    Media & {
+      resolutions: MediaResolution[];
+    }
+  > {
+    return await this.prisma.media.findUnique({
+      where: {
+        mdmId_version: {
+          mdmId,
+          version,
+        },
+      },
+      include: {
+        resolutions: true,
+      },
+    });
+  }
+
+  private async getLatestVersionsByMdmId() {
+    // }> //   _max: { version: number }; //   mdmId: number; // : Promise<{
+    return await this.prisma.media.groupBy({
+      by: ['mdmId'],
+      where: {
+        deletedAt: null,
+      },
+      // TODO: if pagination needed
+      // orderBy: {
+      //   mdmId: 'asc',
+      // },
+      // skip: 1,
+      // take: 2,
+      _max: {
+        version: true,
+      },
+    });
   }
 
   async findOne(mediaId: number) {
