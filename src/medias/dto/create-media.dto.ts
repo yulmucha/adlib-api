@@ -1,9 +1,9 @@
 import { MediaState } from '@prisma/client';
 
-interface Resolution {
-  width: number;
-  height: number;
-  ppi: number;
+export class CreateResolutionDto {
+  readonly width: number;
+  readonly height: number;
+  readonly ppi: number;
 }
 
 export class CreateMediaDto {
@@ -19,5 +19,5 @@ export class CreateMediaDto {
   readonly workingMonitorCount: number;
   readonly managementMonitorCount: number;
   readonly householdCount: number;
-  readonly resolutions: Resolution[];
+  readonly resolutions: CreateResolutionDto[];
 }
