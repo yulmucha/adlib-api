@@ -348,15 +348,12 @@ export class MediasService {
   }
 
   async remove(id: number) {
-    const media = await this.prisma.media.findUnique({
-      where: { id },
-    });
+    const media = await this.findOneMediaById(id);
 
-    if (media === null || media.deletedAt !== null) {
-      console.log(media);
-      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${id}`);
-    }
+    await this.softDelete(media);
+  }
 
+  private async softDelete(media: Media & { resolutions: MediaResolution[] }) {
     await this.prisma.media.update({
       where: { id: media.id },
       data: {
