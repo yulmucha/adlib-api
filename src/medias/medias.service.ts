@@ -222,11 +222,28 @@ export class MediasService {
     }));
   }
 
-  async findOne(id: number) {
+  async findOne(mediaId: number) {
+    const media = await this.findOneMediaById(mediaId);
+
+    const resolutions = await this.findAllResolutionsByIdIn(
+      media.resolutions.map((mediaResolution) => mediaResolution.resolutionId),
+    );
+
+    return {
+      ...media,
+      ...{ resolutions },
+    };
+  }
+
+  private async findOneMediaById(mediaId: number): Promise<
+    Media & {
+      resolutions: MediaResolution[];
+    }
+  > {
     const media = await this.prisma.media.findFirst({
       where: {
         deletedAt: null,
-        id: id,
+        id: mediaId,
       },
       include: {
         resolutions: true,
@@ -234,27 +251,10 @@ export class MediasService {
     });
 
     if (media === null) {
-      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${id}`);
+      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${mediaId}`);
     }
 
-    const resolutions = await this.prisma.resolution.findMany({
-      where: {
-        id: {
-          in: media.resolutions.map(
-            (mediaResolution) => mediaResolution.resolutionId,
-          ),
-        },
-      },
-    });
-
-    if (media.resolutions.length != resolutions.length) {
-      throw new InternalServerErrorException('해상도 데이터 손상');
-    }
-
-    return {
-      ...media,
-      ...{ resolutions },
-    };
+    return media;
   }
 
   async update(updateMediaDto: UpdateMediaDto) {
