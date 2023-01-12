@@ -4,9 +4,9 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { Resolution } from '@prisma/client';
+import { Media, MediaResolution, Resolution } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { CreateMediaDto } from './dto/create-media.dto';
+import { CreateMediaDto, CreateResolutionDto } from './dto/create-media.dto';
 import { UpdateMediaDto } from './dto/update-media.dto';
 
 @Injectable()
@@ -14,60 +14,127 @@ export class MediasService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(createMediaDto: CreateMediaDto) {
-    // TODO: validate DTO fields
+    const mediasByMdmId = await this.findAllMediasByMdmId(createMediaDto.mdmId);
+    const latestVersion = this.getLatestVersion(mediasByMdmId);
+    const latestMedia = this.getLatestMediaOrNull(mediasByMdmId, latestVersion);
 
-    const medias = await this.prisma.media.findMany({
-      where: {
-        mdmId: createMediaDto.mdmId,
-      },
-      include: {
-        resolutions: true,
-      },
-    });
-    const maxVersion = Math.max(0, ...medias.map((m) => m.version));
-    const latestMedia = medias.filter(
-      (media) => media.version === maxVersion && media.deletedAt === null,
-    )[0];
+    if (latestMedia) {
+      const resolutions = await this.findAllResolutionsByIdIn(
+        latestMedia.resolutions.map(
+          (mediaResolution) => mediaResolution.resolutionId,
+        ),
+      );
 
-    if (latestMedia !== undefined) {
-      const resolutions = await this.prisma.resolution.findMany({
-        where: {
-          id: {
-            in: latestMedia.resolutions.map(
-              (mediaResolution) => mediaResolution.resolutionId,
-            ),
-          },
-        },
-      });
       return {
         ...latestMedia,
         ...{ resolutions },
       };
     }
 
-    await this.prisma.resolution.createMany({
-      data: createMediaDto.resolutions,
-      skipDuplicates: true,
-    });
-
+    await this.createMissingResolutions(createMediaDto.resolutions);
     const resolutions = await Promise.all(
-      createMediaDto.resolutions.map(async (resolution) =>
-        this.prisma.resolution.findUniqueOrThrow({
-          where: {
-            width_height_ppi: {
-              width: resolution.width,
-              height: resolution.height,
-              ppi: resolution.ppi,
-            },
-          },
-        }),
+      createMediaDto.resolutions.map((createResolutionDto) =>
+        this.findOneResolution(createResolutionDto),
       ),
     );
 
-    const media = await this.prisma.media.create({
+    const newMedia = await this.createMedia(
+      createMediaDto,
+      latestVersion,
+      resolutions.map((resolution) => ({ resolutionId: resolution.id })),
+    );
+
+    return {
+      ...newMedia,
+      ...{ resolutions },
+    };
+  }
+
+  private async findOneResolution(params: {
+    width: number;
+    height: number;
+    ppi: number;
+  }): Promise<Resolution> {
+    const { width, height, ppi } = params;
+    return await this.prisma.resolution.findUniqueOrThrow({
+      where: { width_height_ppi: { width, height, ppi } },
+    });
+  }
+
+  private async findAllMediasByMdmId(mediaMdmId: number): Promise<
+    (Media & {
+      resolutions: MediaResolution[];
+    })[]
+  > {
+    return await this.prisma.media.findMany({
+      where: {
+        mdmId: mediaMdmId,
+      },
+      include: {
+        resolutions: true,
+      },
+    });
+  }
+
+  private getLatestVersion(
+    mediasByMdmId: (Media & { resolutions: MediaResolution[] })[],
+  ) {
+    return Math.max(0, ...mediasByMdmId.map((m) => m.version));
+  }
+
+  private getLatestMediaOrNull(
+    mediasByMdmId: (Media & { resolutions: MediaResolution[] })[],
+    latestVersion: number,
+  ) {
+    const latestMedias = mediasByMdmId.filter(
+      (media) => media.deletedAt === null && media.version === latestVersion,
+    );
+
+    if (latestMedias.length > 1) {
+      throw new InternalServerErrorException();
+    }
+
+    if (latestMedias.length === 0) {
+      return null;
+    }
+
+    return latestMedias[0];
+  }
+
+  private async findAllResolutionsByIdIn(
+    resolutionIds: number[],
+  ): Promise<Resolution[]> {
+    const resolutions = await this.prisma.resolution.findMany({
+      where: { id: { in: resolutionIds } },
+    });
+
+    if (resolutionIds.length !== resolutions.length) {
+      throw new InternalServerErrorException(
+        '저장되어 있지 않은 해상도 ID를 포함하고 있습니다.',
+      );
+    }
+
+    return resolutions;
+  }
+
+  private async createMissingResolutions(
+    createResolutionDtos: CreateResolutionDto[],
+  ) {
+    await this.prisma.resolution.createMany({
+      data: createResolutionDtos,
+      skipDuplicates: true,
+    });
+  }
+
+  private async createMedia(
+    createMediaDto: CreateMediaDto,
+    latestVersion: number,
+    resolutions: { resolutionId: number }[],
+  ) {
+    return await this.prisma.media.create({
       data: {
         mdmId: createMediaDto.mdmId,
-        version: maxVersion + 1,
+        version: latestVersion + 1,
         name: createMediaDto.name,
         owner: createMediaDto.owner,
         state: createMediaDto.state,
@@ -80,53 +147,20 @@ export class MediasService {
         managementMonitorCount: createMediaDto.managementMonitorCount,
         householdCount: createMediaDto.householdCount,
         resolutions: {
-          create: resolutions.map((r) => {
-            return { resolutionId: r.id };
-          }),
+          create: resolutions,
         },
       },
       include: {
         resolutions: true,
       },
     });
-
-    return {
-      ...media,
-      ...{ resolutions },
-    };
   }
 
   async findAll() {
+    const latestVersionsByMdmId = await this.getLatestVersionsByMdmId();
     const medias = await Promise.all(
-      (
-        await this.prisma.media.groupBy({
-          by: ['mdmId'],
-          where: {
-            deletedAt: null,
-          },
-          // TODO: if pagination needed
-          // orderBy: {
-          //   mdmId: 'asc',
-          // },
-          // skip: 1,
-          // take: 2,
-          _max: {
-            version: true,
-          },
-        })
-      ).map(
-        async ({ mdmId, _max }) =>
-          await this.prisma.media.findUnique({
-            where: {
-              mdmId_version: {
-                mdmId: mdmId,
-                version: _max.version,
-              },
-            },
-            include: {
-              resolutions: true,
-            },
-          }),
+      latestVersionsByMdmId.map(({ mdmId, _max }) =>
+        this.findOneMediaByMdmIdAndVersion(mdmId, _max.version),
       ),
     );
 
@@ -139,11 +173,8 @@ export class MediasService {
         ),
       ),
     ];
-    const resolutions = await this.prisma.resolution.findMany({
-      where: {
-        id: { in: resolutionIds },
-      },
-    });
+    const resolutions = await this.findAllResolutionsByIdIn(resolutionIds);
+
     const resolutionsById = new Map(
       resolutions.map((resolution) => [resolution.id, resolution]),
     );
@@ -151,45 +182,59 @@ export class MediasService {
     return medias.map((media) => ({
       ...media,
       ...{
-        resolutions: media.resolutions.map((mediaResolution) => {
-          const resolution = resolutionsById.get(mediaResolution.resolutionId);
-          if (resolution === undefined) {
-            throw new InternalServerErrorException('해상도 데이터 손상');
-          }
-          return resolution;
-        }),
+        resolutions: media.resolutions.map((mediaResolution) =>
+          resolutionsById.get(mediaResolution.resolutionId),
+        ),
       },
     }));
   }
 
-  async findOne(id: number) {
-    const media = await this.prisma.media.findFirst({
+  private async findOneMediaByMdmIdAndVersion(
+    mdmId: number,
+    version: number,
+  ): Promise<
+    Media & {
+      resolutions: MediaResolution[];
+    }
+  > {
+    return await this.prisma.media.findUnique({
       where: {
-        deletedAt: null,
-        id: id,
+        mdmId_version: {
+          mdmId,
+          version,
+        },
       },
       include: {
         resolutions: true,
       },
     });
+  }
 
-    if (media === null) {
-      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${id}`);
-    }
-
-    const resolutions = await this.prisma.resolution.findMany({
+  private async getLatestVersionsByMdmId() {
+    // }> //   _max: { version: number }; //   mdmId: number; // : Promise<{
+    return await this.prisma.media.groupBy({
+      by: ['mdmId'],
       where: {
-        id: {
-          in: media.resolutions.map(
-            (mediaResolution) => mediaResolution.resolutionId,
-          ),
-        },
+        deletedAt: null,
+      },
+      // TODO: if pagination needed
+      // orderBy: {
+      //   mdmId: 'asc',
+      // },
+      // skip: 1,
+      // take: 2,
+      _max: {
+        version: true,
       },
     });
+  }
 
-    if (media.resolutions.length != resolutions.length) {
-      throw new InternalServerErrorException('해상도 데이터 손상');
-    }
+  async findOne(mediaId: number) {
+    const media = await this.findOneMediaById(mediaId);
+
+    const resolutions = await this.findAllResolutionsByIdIn(
+      media.resolutions.map((mediaResolution) => mediaResolution.resolutionId),
+    );
 
     return {
       ...media,
@@ -197,60 +242,69 @@ export class MediasService {
     };
   }
 
-  async update(updateMediaDto: UpdateMediaDto) {
-    // TODO: validate DTO fields
-    if (updateMediaDto.mdmId === undefined) {
-      throw new BadRequestException('mdmId 누락');
+  private async findOneMediaById(mediaId: number): Promise<
+    Media & {
+      resolutions: MediaResolution[];
     }
-
-    // TODO: Remove duplicate code
-    const medias = await this.prisma.media.findMany({
+  > {
+    const media = await this.prisma.media.findFirst({
       where: {
-        mdmId: updateMediaDto.mdmId,
+        deletedAt: null,
+        id: mediaId,
       },
       include: {
         resolutions: true,
       },
     });
-    const maxVersion = Math.max(0, ...medias.map((m) => m.version));
-    const latestMedia = medias.filter(
-      (media) => media.version === maxVersion && media.deletedAt === null,
-    )[0];
 
-    if (latestMedia === undefined) {
+    if (media === null) {
+      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${mediaId}`);
+    }
+
+    return media;
+  }
+
+  async update(updateMediaDto: UpdateMediaDto) {
+    const mediasByMdmId = await this.findAllMediasByMdmId(updateMediaDto.mdmId);
+    const latestVersion = this.getLatestVersion(mediasByMdmId);
+    const latestMedia = this.getLatestMediaOrNull(mediasByMdmId, latestVersion);
+
+    if (!latestMedia) {
       throw new NotFoundException(
         `매체를 찾을 수 없습니다. mdmId: ${updateMediaDto.mdmId}`,
       );
     }
 
-    // TODO: Remove duplicate code
     let resolutions: Resolution[];
     if (updateMediaDto.resolutions !== undefined) {
-      await this.prisma.resolution.createMany({
-        data: updateMediaDto.resolutions,
-        skipDuplicates: true,
-      });
+      await this.createMissingResolutions(updateMediaDto.resolutions);
 
       resolutions = await Promise.all(
-        updateMediaDto.resolutions?.map(async (resolution) =>
-          this.prisma.resolution.findUniqueOrThrow({
-            where: {
-              width_height_ppi: {
-                width: resolution.width,
-                height: resolution.height,
-                ppi: resolution.ppi,
-              },
-            },
-          }),
+        updateMediaDto.resolutions?.map((resolutionDto) =>
+          this.findOneResolution(resolutionDto),
         ),
       );
     }
 
     // TODO: don't create if there are no changes
+    await this.updateMedia(
+      latestMedia,
+      updateMediaDto,
+      latestVersion,
+      resolutions,
+    );
+  }
+
+  private async updateMedia(
+    latestMedia: Media & { resolutions: MediaResolution[] },
+    updateMediaDto: UpdateMediaDto,
+    latestVersion: number,
+    resolutions: Resolution[],
+  ) {
     await this.prisma.media.create({
       data: {
-        mdmId: updateMediaDto.mdmId!,
-        version: maxVersion + 1,
+        mdmId: updateMediaDto.mdmId,
+        version: latestVersion + 1,
         name: updateMediaDto.name ?? latestMedia.name,
         owner: updateMediaDto.owner ?? latestMedia.owner,
         state: updateMediaDto.state ?? latestMedia.state,
@@ -281,15 +335,12 @@ export class MediasService {
   }
 
   async remove(id: number) {
-    const media = await this.prisma.media.findUnique({
-      where: { id },
-    });
+    const media = await this.findOneMediaById(id);
 
-    if (media === null || media.deletedAt !== null) {
-      console.log(media);
-      throw new NotFoundException(`매체를 찾을 수 없습니다. id: ${id}`);
-    }
+    await this.softDelete(media);
+  }
 
+  private async softDelete(media: Media & { resolutions: MediaResolution[] }) {
     await this.prisma.media.update({
       where: { id: media.id },
       data: {
